@@ -151,6 +151,8 @@ class WhatsapptenantstemplateformController extends FormController
 			$this->redirect();
 		}
 
+		//
+
 		// Check in the profile.
 		if ($return)
 		{
