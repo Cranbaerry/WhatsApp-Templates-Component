@@ -54,10 +54,6 @@ $wa->useStyle('com_dt_whatsapp_tenants_templates.list');
 						<?php echo HTMLHelper::_('grid.sort',  'COM_DT_WHATSAPP_TENANTS_TEMPLATES_WHATSAPPTENANTSTEMPLATES_ID', 'a.id', $listDirn, $listOrder); ?>
 					</th>
 
-					<th >
-						<?php echo HTMLHelper::_('grid.sort', 'JPUBLISHED', 'a.state', $listDirn, $listOrder); ?>
-					</th>
-
 					<th class=''>
 						<?php echo HTMLHelper::_('grid.sort',  'COM_DT_WHATSAPP_TENANTS_TEMPLATES_WHATSAPPTENANTSTEMPLATES_NAME', 'a.name', $listDirn, $listOrder); ?>
 					</th>
@@ -110,16 +106,6 @@ $wa->useStyle('com_dt_whatsapp_tenants_templates.list');
 					
 					<td>
 						<?php echo $item->id; ?>
-					</td>
-					<td>
-						<?php $class = ($canChange) ? 'active' : 'disabled'; ?>
-						<a class="btn btn-micro <?php echo $class; ?>" href="<?php echo ($canChange) ? Route::_('index.php?option=com_dt_whatsapp_tenants_templates&task=whatsapptenantstemplate.publish&id=' . $item->id . '&state=' . (($item->state + 1) % 2), false, 2) : '#'; ?>">
-						<?php if ($item->state == 1): ?>
-							<i class="icon-publish"></i>
-						<?php else: ?>
-							<i class="icon-unpublish"></i>
-						<?php endif; ?>
-						</a>
 					</td>
 					<td>
 						<?php $canCheckin = Factory::getApplication()->getIdentity()->authorise('core.manage', 'com_dt_whatsapp_tenants_templates.' . $item->id) || $item->checked_out == Factory::getApplication()->getIdentity()->id; ?>

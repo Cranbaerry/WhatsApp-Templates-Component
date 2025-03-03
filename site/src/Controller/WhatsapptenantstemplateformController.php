@@ -20,6 +20,7 @@ use Joomla\CMS\Router\Route;
 use Joomla\CMS\Uri\Uri;
 use Joomla\Utilities\ArrayHelper;
 use Joomla\CMS\MVC\Model\BaseDatabaseModel;
+use Exception;
 
 /**
  * Whatsapptenantstemplate class.
@@ -135,6 +136,204 @@ class WhatsapptenantstemplateformController extends FormController
 			$this->redirect();
 		}
 
+		$url = '';
+
+
+		// CUSTOM CODE
+		try {
+			$config_model = Factory::getApplication()->bootComponent('com_dt_whatsapp_tenants_configs')->getMVCFactory()->createModel('whatsapptenantsconfig');
+			$user  = Factory::getUser();
+			$user_id = $user->get('id');
+			$config = $config_model->getItemByUserId($user_id);
+			$files = $this->app->input->files->get('jform');
+			$file_handle = null;
+			$template = null;
+			
+			if (empty($config)) {
+				throw new Exception("No configuration found for user.");
+			}
+
+			if (!empty($data['id'])) {
+				$db = Factory::getDbo();
+				$query = $db->getQuery(true);
+				$query->select('*')
+					->from('#__dt_whatsapp_tenants_templates')
+					->where('id = ' . $db->quote($data['id']));
+				$db->setQuery($query);
+				$db->execute();
+				
+				$template = $db->loadObject();
+				$url_main = "https://graph.facebook.com/v22.0/{$template->template_id}";
+				if ($data['name'] != $template->name) {
+					throw new Exception("Template name cannot be changed from {$template->name}");
+				}
+			} else {
+				//die('This is an insert operation.');
+				$url_main = "https://graph.facebook.com/v22.0/$config->business_account_id/message_templates";
+			}
+
+			if (!empty($files['header_media'])) {
+				$fileData = $files['header_media'];
+				$uploadSessionId = null;
+				
+				// Initialize file upload id
+				if (empty($files['header_media']['name'])) {
+					// No new file uploaded, so get the existing file from the database.
+					$filePath = JPATH_ROOT . '/uploads/' . $user_id . '/' . $template->header_media;
+					if (!file_exists($filePath)) {
+						throw new Exception("Existing file not found");
+					}
+					$fileData = [
+						'name'     => $template->header_media,
+						'size'     => filesize($filePath),
+						'type'     => mime_content_type($filePath),
+						'tmp_name' => $filePath,
+						'error'    => 0
+					];
+				}
+
+				$url = "https://graph.facebook.com/v22.0/{$config->app_id}/uploads?" . http_build_query([
+					'file_name'    => $fileData['name'],
+					'file_length'  => $fileData['size'],
+					'file_type'    => $fileData['type'],
+					'access_token' => $config->token,
+				]);
+
+				$ch = curl_init($url);
+				curl_setopt($ch, CURLOPT_POST, true);
+				curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+				$response = curl_exec($ch);
+				if ($response === false) {
+					throw new Exception("cURL error: " . curl_error($ch));
+				}
+
+				$jsonResponse = json_decode($response);
+				if ($jsonResponse && isset($jsonResponse->error)) {
+					$errorMsg  = $jsonResponse->error->message;
+					$errorCode = $jsonResponse->error->code;
+					$userErrorMsg = $jsonResponse->error->error_user_msg;
+					throw new Exception("Facebook API error (code {$errorCode}): {$errorMsg} {$userErrorMsg}");
+				}
+
+				if ($jsonResponse && isset($jsonResponse->id)) {
+					$uploadSessionId = $jsonResponse->id;
+				}
+
+				curl_close($ch);
+	
+				// Begin upload
+				$fileBinary = file_get_contents($fileData['tmp_name']);
+				$url = "https://graph.facebook.com/v22.0/{$uploadSessionId}";
+				$ch = curl_init($url);
+				$headers = [
+					"Authorization: OAuth {$config->token}",
+					"file_offset: 0"
+				];
+				curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+				curl_setopt($ch, CURLOPT_POST, true);
+				curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+				curl_setopt($ch, CURLOPT_POSTFIELDS, $fileBinary);
+				$response = curl_exec($ch);
+				if ($response === false) {
+					throw new Exception("cURL error: " . curl_error($ch));
+				}
+
+				$jsonResponse = json_decode($response);
+				if ($jsonResponse && isset($jsonResponse->debug_info->message)) {
+					throw new Exception("Facebook API error (code {$jsonResponse->debug_info->type}): {$jsonResponse->debug_info->message}");
+				}
+
+				if ($jsonResponse && isset($jsonResponse->h)) {
+					$file_handle = $jsonResponse->h;
+				}
+
+				curl_close($ch);
+			}
+	
+			$payload = [
+				"name"      => $data["name"],
+				"language"  => $data["language"],
+				"category"  => $data["category"],
+				"components" => [
+					[
+						"type"    => "HEADER",
+						"format"  => $data["header_type"],
+						"text"    => trim($data["header_text"])
+					],
+					[
+						"type"    => "BODY",
+						"text"    => trim($data["body"])
+					],
+					[
+						"type"    => "BUTTONS",
+						"buttons" => [
+							[
+								"type" => "QUICK_REPLY",
+								"text" => "Unsubscribe from Promos"
+							]
+						]
+					]
+				]
+			];
+
+			if (!empty($data["footer"])) {
+				$payload["components"][] = [
+					"type"    => "FOOTER",
+					"text"    => $data["footer"]
+				];
+			}
+
+			if (!empty($files['header_media'])) {
+				$payload['components'][0]['example']['header_handle'] = [$file_handle];
+				unset($payload['components'][0]['text']);
+			}
+
+			$jsonData = json_encode($payload);
+	
+			// Initialize the cURL session
+			$ch = curl_init($url_main);
+			curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+			curl_setopt($ch, CURLOPT_POST, true);
+			curl_setopt($ch, CURLOPT_POSTFIELDS, $jsonData);
+			curl_setopt($ch, CURLOPT_HTTPHEADER, [
+				"Content-Type: application/json",
+				"Authorization: Bearer $config->token"
+			]);
+	
+			// Execute the cURL request
+			$response = curl_exec($ch);
+			if ($response === false) {
+				throw new Exception("cURL error: " . curl_error($ch));
+			}
+
+			$jsonResponse = json_decode($response);
+			if ($jsonResponse && isset($jsonResponse->error)) {
+				$errorMsg  = $jsonResponse->error->message;
+				$errorCode = $jsonResponse->error->code;
+				$userErrorMsg = $jsonResponse->error->error_user_msg;
+				throw new Exception("Facebook API error (code {$errorCode}): {$errorMsg} {$userErrorMsg}");
+			}
+
+			if ($jsonResponse && isset($jsonResponse->status)) {
+				$data['status'] = $jsonResponse->status;
+				$data['category'] = $jsonResponse->category;
+				$data['template_id'] = $jsonResponse->id;
+			}
+		
+			// Close the cURL session
+			curl_close($ch);
+		} catch (Exception $e) {
+			// Save the data in the session.
+			$this->app->setUserState('com_dt_whatsapp_tenants_templates.edit.whatsapptenantstemplate.data', $data);
+			
+			// Redirect back to the edit screen.
+			$id = (int) $this->app->getUserState('com_dt_whatsapp_tenants_templates.edit.whatsapptenantstemplate.id');
+			$this->setMessage(Text::sprintf($e->getMessage()), 'warning');
+			$this->setRedirect(Route::_('index.php?option=com_dt_whatsapp_tenants_templates&view=whatsapptenantstemplateform&layout=edit&id=' . $id, false));
+			$this->redirect();
+		}
+		// END OF CUSTOM CODE
+
 		// Attempt to save the data.
 		$return = $model->save($data);
 
@@ -150,8 +349,6 @@ class WhatsapptenantstemplateformController extends FormController
 			$this->setRedirect(Route::_('index.php?option=com_dt_whatsapp_tenants_templates&view=whatsapptenantstemplateform&layout=edit&id=' . $id, false));
 			$this->redirect();
 		}
-
-		//
 
 		// Check in the profile.
 		if ($return)
@@ -237,6 +434,60 @@ class WhatsapptenantstemplateformController extends FormController
 
 			if($return)
 			{
+				// GRAB CONFIG DATA
+				$config_model = Factory::getApplication()
+					->bootComponent('com_dt_whatsapp_tenants_configs')
+					->getMVCFactory()
+					->createModel('whatsapptenantsconfig');
+				$user    = Factory::getUser();
+				$user_id = $user->get('id');
+				$config  = $config_model->getItemByUserId($user_id);
+
+				// Grab the item data based on the primary key
+				$db = Factory::getDbo();
+				$query = $db->getQuery(true);
+				$query->select('name')
+					->from('#__dt_whatsapp_tenants_templates')
+					->where('id = ' . $db->quote($pk));
+				$db->setQuery($query);
+				$db->execute();
+				$template = $db->loadResult();
+
+				if (empty($template)) {
+					throw new Exception("Item not found.");
+				}
+
+				if (empty($config)) {
+					throw new Exception("No configuration found for user.");
+				}
+
+				// Initialize the cURL session
+				$ch = curl_init("https://graph.facebook.com/v22.0/{$config->business_account_id}/message_templates?name={$template}");
+				curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+				curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "DELETE");
+				curl_setopt($ch, CURLOPT_HTTPHEADER, [
+					"Content-Type: application/json",
+					"Authorization: Bearer {$config->token}"
+				]);
+
+				// Execute the cURL request
+				$response = curl_exec($ch);
+				if ($response === false) {
+					throw new Exception("cURL error: " . curl_error($ch));
+				}
+
+				$jsonResponse = json_decode($response);
+				if ($jsonResponse && isset($jsonResponse->error)) {
+					$errorMsg    = $jsonResponse->error->message;
+					$errorCode   = $jsonResponse->error->code;
+					$userErrorMsg = isset($jsonResponse->error->error_user_msg) ? $jsonResponse->error->error_user_msg : "";
+					throw new Exception("Facebook API error (code {$errorCode}): {$errorMsg} {$userErrorMsg}");
+				} 
+
+				// Close the cURL session
+				curl_close($ch);
+				// END OF CUSTOM CODE
+
 				$model->delete($pk);
 				$this->setMessage(Text::_('COM_DT_WHATSAPP_TENANTS_TEMPLATES_ITEM_DELETED_SUCCESSFULLY'));
 			}
