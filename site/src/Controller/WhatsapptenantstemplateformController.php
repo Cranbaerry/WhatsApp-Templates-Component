@@ -172,7 +172,7 @@ class WhatsapptenantstemplateformController extends FormController
 				$url_main = "https://graph.facebook.com/v22.0/$config->business_account_id/message_templates";
 			}
 
-			if (!empty($files['header_media'])) {
+			if (!empty($files['header_media']) && $data['header_type'] !== 'TEXT') {
 				$fileData = $files['header_media'];
 				$uploadSessionId = null;
 				
@@ -283,7 +283,7 @@ class WhatsapptenantstemplateformController extends FormController
 				];
 			}
 
-			if (!empty($files['header_media'])) {
+			if (!empty($files['header_media']) && $data['header_type'] !== 'TEXT') {
 				$payload['components'][0]['example']['header_handle'] = [$file_handle];
 				unset($payload['components'][0]['text']);
 			}
